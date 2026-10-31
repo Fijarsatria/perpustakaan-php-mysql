@@ -195,10 +195,131 @@ $bukus = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
     <title>Daftar Buku</title>
+    <style>
+        body {
+            background-color: #f1f4f8 !important;
+            color: #293649;
+        }
+
+        header.bg-primary {
+            background-color: #24558a !important;
+            padding: 24px !important;
+        }
+
+        header p {
+            margin: 6px 0 0;
+            color: #e0eaf6;
+            font-size: 14px;
+        }
+
+        .navbar.bg-primary {
+            background-color: #1e4774 !important;
+            border-color: #41658d !important;
+            padding: 12px 24px;
+        }
+
+        .container-fluid.my-4 {
+            padding-right: 24px;
+            padding-left: 24px;
+        }
+
+        aside > div,
+        main > section {
+            border-color: #dce3ec !important;
+            border-radius: 8px !important;
+            box-shadow: 0 2px 5px rgba(30, 55, 85, 0.04);
+        }
+
+        aside h2 {
+            font-size: 20px;
+            margin-bottom: 16px;
+        }
+
+        .list-group-item {
+            padding: 12px 16px;
+        }
+
+        .list-group-item:hover {
+            background-color: #eff5fc;
+        }
+
+        main > section {
+            padding: 24px !important;
+        }
+
+        main h2 {
+            padding-bottom: 14px;
+            border-bottom: 1px solid #e5eaf0;
+            color: #24558a;
+            font-size: 21px;
+        }
+
+        .form-label {
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-control {
+            min-height: 40px;
+            border-color: #cbd5e1;
+        }
+
+        .btn-primary {
+            background-color: #24558a;
+            border-color: #24558a;
+        }
+
+        .btn-primary:hover {
+            background-color: #1e4774;
+            border-color: #1e4774;
+        }
+
+        .table > thead > tr > th {
+            background-color: #eaf0f7;
+            color: #294b71;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .table > :not(caption) > * > * {
+            padding: 12px;
+        }
+
+        .table td {
+            min-width: 70px;
+            max-width: 300px;
+            overflow-wrap: anywhere;
+        }
+
+        footer.bg-primary {
+            background-color: #24558a !important;
+            font-size: 14px;
+        }
+
+        @media (max-width: 767px) {
+            aside {
+                margin-bottom: 20px;
+            }
+
+            .navbar form {
+                width: 100%;
+            }
+
+            .container-fluid.my-4 {
+                padding-right: 12px;
+                padding-left: 12px;
+            }
+
+            main > section {
+                padding: 18px !important;
+            }
+        }
+    </style>
 </head>
 <body class="bg-light">
     <header class="bg-primary text-white p-3">
         <h1 class="h3 m-0">Website Peminjaman Buku</h1>
+        <p>Kelola data buku perpustakaan</p>
     </header>
 
     <nav class="navbar navbar-dark bg-primary border-top">
@@ -224,7 +345,7 @@ $bukus = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <h2>Menu</h2>
                 <ul class="list-group">
                     <li class="list-group-item"><a href="index.php" class="text-decoration-none">Beranda</a></li>
-                    <li class="list-group-item"><a href="#daftarBuku" class="text-decoration-none">Daftar Buku</a></li>
+                    <li class="list-group-item bg-primary-subtle"><a href="#daftarBuku" class="text-decoration-none">Daftar Buku</a></li>
                     <li class="list-group-item"><a href="index.php#formBuku" class="text-decoration-none"> Tambah Buku</a></li>
                 </ul>
                 </div>
