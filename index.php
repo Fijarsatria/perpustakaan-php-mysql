@@ -1,70 +1,356 @@
 <?php
 session_start();
-function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
-function stop($code, $message) { http_response_code($code); exit(e($message)); }
-try { require __DIR__ . '/config.php'; } catch (PDOException $ex) { error_log($ex->getMessage()); stop(500, 'Database belum terhubung. Periksa konfigurasi dan impor database/schema.sql.'); }
-$_SESSION['csrf'] = $_SESSION['csrf'] ?? bin2hex(random_bytes(32));
-$errors = [];
-$book = ['id'=>'', 'Judul'=>'', 'Penulis'=>'', 'Penerbit'=>'', 'Tahun Terbit'=>date('Y'), 'Stok'=>0];
-$mode = $_GET['action'] ?? 'add';
-if (!in_array($mode, ['add','edit','delete'], true)) stop(400, 'Aksi tidak dikenal.');
-if ($mode !== 'add') {
-    $id = filter_var($_GET['id'] ?? '', FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]);
-    if (!$id) stop(400, 'ID buku tidak valid.');
-    $s = $pdo->prepare('SELECT * FROM buku WHERE id = ?'); $s->execute([$id]);
-    $book = $s->fetch(); if (!$book) stop(404, 'Buku tidak ditemukan.');
+
+$host = "localhost";
+$user = "root";
+$password = "";
+$database = "perpustakaan";
+
+try {
+    $conn = new PDO(
+        "mysql:host=$host;dbname=$database;charset=utf8mb4",
+        $user,
+        $password,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+    );
+} catch (PDOException $e) {
+    error_log($e->getMessage());
+    http_response_code(500);
+    exit("Koneksi database gagal. Periksa MySQL dan database perpustakaan.");
 }
+
+// Token digunakan untuk memeriksa formulir yang dikirim.
+if (!isset($_SESSION['token'])) {
+    $_SESSION['token'] = bin2hex(random_bytes(32));
+}
+
+$id = '';
+$judul = '';
+$penulis = '';
+$penerbit = '';
+$tahunTerbit = '';
+$stok = '';
+$edit = false;
+$error = [];
+$pesan = $_SESSION['pesan'] ?? '';
+$jenisPesan = 'success';
+unset($_SESSION['pesan']);
+
+// Mengambil data buku yang akan diedit.
+if (isset($_GET['edit'])) {
+    $id = filter_var($_GET['edit'], FILTER_VALIDATE_INT);
+
+    if (!$id || $id < 1) {
+        http_response_code(400);
+        exit("ID buku tidak valid.");
+    }
+
+    $stmt = $conn->prepare("SELECT * FROM buku WHERE id = :id");
+    $stmt->execute([':id' => $id]);
+    $bukuEdit = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$bukuEdit) {
+        http_response_code(404);
+        exit("Buku tidak ditemukan.");
+    }
+
+    $edit = true;
+    $judul = $bukuEdit['Judul'];
+    $penulis = $bukuEdit['Penulis'];
+    $penerbit = $bukuEdit['Penerbit'];
+    $tahunTerbit = $bukuEdit['Tahun Terbit'];
+    $stok = $bukuEdit['Stok'];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!is_string($_POST['csrf'] ?? null) || !hash_equals($_SESSION['csrf'], $_POST['csrf'])) stop(403, 'Sesi formulir tidak valid. Muat ulang halaman.');
-    if ($mode === 'delete') {
-        $s = $pdo->prepare('DELETE FROM buku WHERE id = ?'); $s->execute([$book['id']]);
-        $_SESSION['flash'] = 'Buku berhasil dihapus.';
-        header('Location: index.php'); exit;
+    $token = $_POST['token'] ?? '';
+
+    if (!is_string($token) || !hash_equals($_SESSION['token'], $token)) {
+        http_response_code(403);
+        exit("Formulir tidak valid. Silakan muat ulang halaman.");
     }
-    foreach (['Judul','Penulis','Penerbit','Tahun Terbit','Stok'] as $key) {
-        $value = $_POST[str_replace(' ', '_', $key)] ?? '';
-        $book[$key] = is_string($value) ? trim($value) : '';
+
+    $aksi = $_POST['aksi'] ?? '';
+    $id = filter_var($_POST['id'] ?? '', FILTER_VALIDATE_INT);
+
+    if ($aksi !== 'simpan' && $aksi !== 'hapus') {
+        http_response_code(400);
+        exit("Aksi tidak valid.");
     }
-    foreach (['Judul'=>150,'Penulis'=>100,'Penerbit'=>100] as $key=>$max) {
-        $length = mb_strlen($book[$key], 'UTF-8');
-        if ($length < ($key==='Judul' ? 5 : 1) || $length > $max) $errors[] = "$key harus diisi dengan " . ($key==='Judul' ? '5' : '1') . " sampai $max karakter.";
+
+    // Pastikan ID yang dikirim benar-benar ada.
+    if (($_POST['id'] ?? '') !== '' || $aksi === 'hapus') {
+        if (!$id || $id < 1) {
+            http_response_code(400);
+            exit("ID buku tidak valid.");
+        }
+
+        $stmt = $conn->prepare("SELECT id FROM buku WHERE id = :id");
+        $stmt->execute([':id' => $id]);
+
+        if (!$stmt->fetch()) {
+            http_response_code(404);
+            exit("Buku tidak ditemukan.");
+        }
     }
-    $year = filter_var($book['Tahun Terbit'], FILTER_VALIDATE_INT);
-    $stock = filter_var($book['Stok'], FILTER_VALIDATE_INT);
-    if ($year === false || $year < 1901 || $year > (int)date('Y')) $errors[] = 'Tahun terbit harus berupa bilangan bulat antara 1901 dan ' . date('Y') . '.';
-    if ($stock === false || $stock < 0 || $stock > 2147483647) $errors[] = 'Stok harus berupa bilangan bulat 0 sampai 2147483647.';
-    if (!$errors) {
-        $values = [$book['Judul'],$book['Penulis'],$book['Penerbit'],$year,$stock];
-        if ($mode === 'edit') { $sql = 'UPDATE buku SET Judul=?, Penulis=?, Penerbit=?, `Tahun Terbit`=?, Stok=? WHERE id=?'; $values[]=$book['id']; }
-        else $sql = 'INSERT INTO buku (Judul,Penulis,Penerbit,`Tahun Terbit`,Stok) VALUES (?,?,?,?,?)';
-        try { $pdo->prepare($sql)->execute($values); $_SESSION['flash'] = $mode==='edit' ? 'Perubahan buku berhasil disimpan.' : 'Buku berhasil ditambahkan.'; header('Location: index.php'); exit; }
-        catch (PDOException $ex) { error_log($ex->getMessage()); $errors[]='Data belum tersimpan. Silakan coba kembali.'; }
+
+    // Menghapus buku setelah pengguna menyetujui konfirmasi.
+    if ($aksi === 'hapus') {
+        $stmt = $conn->prepare("DELETE FROM buku WHERE id = :id");
+        $stmt->execute([':id' => $id]);
+
+        $_SESSION['pesan'] = 'Buku berhasil dihapus.';
+        header("Location: index.php");
+        exit();
     }
-    http_response_code(422);
+
+    $judul = is_string($_POST['judul'] ?? null) ? trim($_POST['judul']) : '';
+    $penulis = is_string($_POST['penulis'] ?? null) ? trim($_POST['penulis']) : '';
+    $penerbit = is_string($_POST['penerbit'] ?? null) ? trim($_POST['penerbit']) : '';
+    $tahunTerbit = is_string($_POST['tahun_terbit'] ?? null) ? trim($_POST['tahun_terbit']) : '';
+    $stok = is_string($_POST['stok'] ?? null) ? trim($_POST['stok']) : '';
+    $edit = (bool) $id;
+
+    if (mb_strlen($judul) < 5 || mb_strlen($judul) > 150) {
+        $error[] = "Judul buku harus terdiri dari 5 sampai 150 karakter.";
+    }
+    if ($penulis === '' || mb_strlen($penulis) > 100) {
+        $error[] = "Penulis wajib diisi, maksimal 100 karakter.";
+    }
+    if ($penerbit === '' || mb_strlen($penerbit) > 100) {
+        $error[] = "Penerbit wajib diisi, maksimal 100 karakter.";
+    }
+    if (filter_var($tahunTerbit, FILTER_VALIDATE_INT) === false ||
+        $tahunTerbit < 1901 || $tahunTerbit > date('Y')) {
+        $error[] = "Tahun terbit harus antara 1901 sampai " . date('Y') . ".";
+    }
+    if (filter_var($stok, FILTER_VALIDATE_INT) === false ||
+        $stok < 0 || $stok > 2147483647) {
+        $error[] = "Stok harus berupa bilangan bulat dari 0 sampai 2147483647.";
+    }
+
+    if (empty($error)) {
+        $data = [
+            ':judul' => $judul,
+            ':penulis' => $penulis,
+            ':penerbit' => $penerbit,
+            ':tahun_terbit' => $tahunTerbit,
+            ':stok' => $stok
+        ];
+
+        try {
+            if ($edit) {
+                // Memperbarui buku berdasarkan ID.
+                $stmt = $conn->prepare(
+                    "UPDATE buku SET Judul = :judul, Penulis = :penulis,
+                     Penerbit = :penerbit, `Tahun Terbit` = :tahun_terbit,
+                     Stok = :stok WHERE id = :id"
+                );
+                $data[':id'] = $id;
+                $stmt->execute($data);
+                $_SESSION['pesan'] = 'Data buku berhasil diperbarui.';
+            } else {
+                // Menambahkan buku baru ke database.
+                $stmt = $conn->prepare(
+                    "INSERT INTO buku (Judul, Penulis, Penerbit, `Tahun Terbit`, Stok)
+                     VALUES (:judul, :penulis, :penerbit, :tahun_terbit, :stok)"
+                );
+                $stmt->execute($data);
+                $_SESSION['pesan'] = 'Buku berhasil ditambahkan.';
+            }
+
+            header("Location: index.php");
+            exit();
+        } catch (PDOException $e) {
+            error_log($e->getMessage());
+            $error[] = "Data buku belum berhasil disimpan. Silakan coba kembali.";
+        }
+    }
+
+    if (!empty($error)) {
+        http_response_code(422);
+        $pesan = implode(' ', $error);
+        $jenisPesan = 'danger';
+    }
 }
-$q = is_string($_GET['q'] ?? '') ? trim($_GET['q'] ?? '') : '';
-$s=$pdo->prepare('SELECT * FROM buku WHERE Judul LIKE ? OR Penulis LIKE ? OR Penerbit LIKE ? ORDER BY id DESC');
-$s->execute(array_fill(0,3,'%'.$q.'%')); $books=$s->fetchAll();
-$stats=$pdo->query('SELECT COUNT(*) AS titles, COALESCE(SUM(Stok),0) AS copies, COUNT(DISTINCT Penulis) AS authors FROM buku')->fetch();
-$flash=$_SESSION['flash'] ?? ''; unset($_SESSION['flash']);
+
+// Menampilkan daftar buku dan hasil pencarian.
+$cari = is_string($_GET['cari'] ?? '') ? trim($_GET['cari'] ?? '') : '';
+$stmt = $conn->prepare(
+    "SELECT * FROM buku
+     WHERE Judul LIKE :judul OR Penulis LIKE :penulis
+     ORDER BY created_at DESC, id DESC"
+);
+$stmt->execute([
+    ':judul' => '%' . $cari . '%',
+    ':penulis' => '%' . $cari . '%'
+]);
+$bukus = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
-<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ruang Baca | Katalog Buku</title><link rel="stylesheet" href="assets/style.css"></head><body>
-<aside class="sidebar"><a class="brand" href="index.php"><span class="logo">RB</span> Ruang Baca<span class="subbrand">PERPUSTAKAAN BUKU</span></a><p class="nav-label">RUANG KELOLA</p><a class="nav active" href="index.php">▤ &nbsp; Katalog buku</a><a class="nav" href="index.php#form-buku">＋ &nbsp; Tambah buku</a><div class="side-note">Setiap buku,<br>sebuah pengetahuan.<span>Kelola koleksi dengan lebih teratur.</span></div><small class="side-footer">PRAKTIK PEMROGRAMAN WEB · 2026</small></aside>
-<main><header><span>Koleksi / <strong>Katalog buku</strong></span><span class="status">● &nbsp; Perpustakaan aktif</span></header>
-<section class="intro"><div><p class="eyebrow">RUANG BACA / KATALOG</p><h1>Koleksi dalam satu ruang.</h1><p>Catat buku baru, perbarui informasi, dan rapikan koleksi perpustakaan.</p></div><a class="button" href="index.php#form-buku">＋ Tambah buku</a></section>
-<section class="stats" aria-label="Ringkasan koleksi"><div><span>Judul dalam katalog</span><strong><?= e($stats['titles']) ?><small> judul</small></strong></div><div><span>Total persediaan</span><strong><?= e($stats['copies']) ?><small> eksemplar</small></strong></div><div><span>Penulis dalam koleksi</span><strong><?= e($stats['authors']) ?><small> penulis</small></strong></div></section>
-<?php if ($flash): ?><div class="notice" role="status"><?= e($flash) ?></div><?php endif; ?>
-<?php if ($errors): ?><div class="notice error" role="alert"><strong>Periksa kembali isian buku.</strong><ul><?php foreach ($errors as $error): ?><li><?= e($error) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
-<?php if ($mode==='delete'): ?>
-<section class="panel danger-panel"><p class="eyebrow">KONFIRMASI HAPUS</p><h2>Hapus buku ini?</h2><p><strong><?= e($book['Judul']) ?></strong> oleh <?= e($book['Penulis']) ?> akan dihapus dari katalog. Tindakan ini tidak dapat dibatalkan.</p><form method="post"><input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><button class="button danger" type="submit">Ya, hapus buku</button><a class="button secondary" href="index.php">Batal</a></form></section>
-<?php else: ?>
-<section class="panel" id="form-buku"><div class="section-heading"><div><p class="eyebrow"><?= $mode==='edit' ? 'PERBARUI KOLEKSI' : 'LENGKAPI KOLEKSI' ?></p><h2><?= $mode==='edit' ? 'Edit buku' : 'Tambah buku baru' ?></h2></div><span class="muted">Semua kolom wajib diisi</span></div>
-<form method="post"><input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>"><div class="fields">
-<?php foreach (['Judul'=>'Judul buku','Penulis'=>'Penulis','Penerbit'=>'Penerbit','Tahun Terbit'=>'Tahun terbit','Stok'=>'Stok'] as $key=>$label): $numeric=in_array($key,['Tahun Terbit','Stok'],true); ?><label><?= e($label) ?><input name="<?= e(str_replace(' ','_',$key)) ?>" value="<?= e($book[$key]) ?>" type="<?= $numeric?'number':'text' ?>" required <?= $numeric ? 'min="'.($key==='Stok'?0:1901).'" max="'.($key==='Stok'?2147483647:date('Y')).'" step="1"' : 'maxlength="'.($key==='Judul'?150:100).'"'.($key==='Judul'?' minlength="5"':'') ?>></label><?php endforeach; ?></div>
-<div class="form-footer"><span class="muted">Informasi yang rapi memudahkan pencarian buku.</span><div><?php if ($mode==='edit'): ?><a class="button secondary" href="index.php">Batal</a><?php endif; ?><button class="button" type="submit"><?= $mode==='edit'?'Simpan perubahan':'Simpan buku' ?></button></div></div></form></section>
-<?php endif; ?>
-<section class="panel catalog"><div class="section-heading"><div><p class="eyebrow">DAFTAR KOLEKSI</p><h2>Katalog buku <span class="count"><?= count($books) ?></span></h2></div><form class="search" method="get"><label class="sr-only" for="q">Cari judul, penulis, atau penerbit</label><input id="q" name="q" value="<?= e($q) ?>" placeholder="Cari judul, penulis, penerbit..."><button class="button secondary" type="submit">Cari</button><?php if ($q!==''): ?><a class="reset" href="index.php">Reset</a><?php endif; ?></form></div>
-<div class="table-wrap"><table><thead><tr><th>No.</th><th>Judul & penulis</th><th>Penerbit</th><th>Tahun</th><th>Stok</th><th>Aksi</th></tr></thead><tbody>
-<?php foreach($books as $i=>$row): ?><tr><td class="muted"><?= $i+1 ?></td><td><div class="book-cell"><span class="book-icon" aria-hidden="true">▤</span><div><strong><?= e($row['Judul']) ?></strong><span><?= e($row['Penulis']) ?></span></div></div></td><td><?= e($row['Penerbit'] ?: '-') ?></td><td><?= e($row['Tahun Terbit']) ?></td><td><span class="stock <?= $row['Stok']==0?'empty':'' ?>"><?= e($row['Stok']) ?> tersedia</span></td><td><div class="actions"><a href="index.php?action=edit&amp;id=<?= e($row['id']) ?>#form-buku">Edit</a><a class="delete-link" href="index.php?action=delete&amp;id=<?= e($row['id']) ?>">Hapus</a></div></td></tr><?php endforeach; ?>
-<?php if (!$books): ?><tr><td colspan="6" class="empty-state"><?= $q!==''?'Tidak ada buku yang cocok. Coba kata kunci lain.':'Belum ada buku. Tambahkan koleksi pertama melalui formulir di atas.' ?></td></tr><?php endif; ?>
-</tbody></table></div><div class="table-footer">Menampilkan <?= count($books) ?> judul<?= $q!==''?' untuk pencarian “'.e($q).'”':'' ?> · Data koleksi perpustakaan</div></section><footer>Ruang Baca <span>Kelola buku. Rawat pengetahuan.</span></footer></main></body></html>
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+    <title>Daftar Buku</title>
+</head>
+<body class="bg-light">
+    <header class="bg-primary text-white p-3">
+        <h1 class="h3 m-0">Website Peminjaman Buku</h1>
+    </header>
+
+    <nav class="navbar navbar-dark bg-primary border-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="index.php">Perpustakaan Buku</a>
+            <form class="d-flex" role="search" method="get" action="index.php">
+                <input class="form-control me-2"
+                    type="search"
+                    name="cari"
+                    value="<?= htmlspecialchars($cari, ENT_QUOTES, 'UTF-8') ?>"
+                    placeholder="Cari judul atau penulis"
+                    aria-label="Cari buku">
+                <button class="btn btn-outline-light"
+                        type="submit">Cari</button>
+            </form>
+        </div>
+    </nav>
+
+    <div class="container-fluid my-4">
+        <div class="row">
+            <aside class="col-md-3">
+                <div class="bg-white border rounded p-3">
+                <h2>Menu</h2>
+                <ul class="list-group">
+                    <li class="list-group-item"><a href="index.php" class="text-decoration-none">Beranda</a></li>
+                    <li class="list-group-item"><a href="#daftarBuku" class="text-decoration-none">Daftar Buku</a></li>
+                    <li class="list-group-item"><a href="index.php#formBuku" class="text-decoration-none"> Tambah Buku</a></li>
+                </ul>
+                </div>
+            </aside>
+
+            <main class="col-md-9">
+                    <?php if ($pesan !== ''): ?>
+                        <div class="alert alert-<?= htmlspecialchars($jenisPesan, ENT_QUOTES, 'UTF-8') ?>" role="alert">
+                            <?= htmlspecialchars($pesan, ENT_QUOTES, 'UTF-8') ?>
+                        </div>
+                    <?php endif; ?>
+
+                <section class="bg-white border rounded p-3 mb-4">
+                    <h2 class="h4 mb-3"><?= $edit ? 'Form Edit Buku' : 'Form Tambah Buku' ?></h2>
+                    <form action="index.php" method="post" id="formBuku" novalidate>
+                        <input type="hidden" name="id" value="<?= htmlspecialchars((string) $id, ENT_QUOTES, 'UTF-8') ?>">
+                        <input type="hidden" name="aksi" value="simpan">
+                        <input type="hidden" name="token" value="<?= htmlspecialchars($_SESSION['token'], ENT_QUOTES, 'UTF-8') ?>">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="judul" class="form-label">Judul Buku</label>
+                                <input type="text" class="form-control" id="judul" maxlength="150" name="judul" value="<?= htmlspecialchars((string) $judul, ENT_QUOTES, 'UTF-8') ?>" minlength="5" required>
+                                <div class="invalid-feedback">Judul buku minimal 5 karakter.</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="penulis" class="form-label">Penulis</label>
+                                <input type="text" class="form-control" id="penulis" maxlength="100" name="penulis" value="<?= htmlspecialchars((string) $penulis, ENT_QUOTES, 'UTF-8') ?>" required>
+                                <div class="invalid-feedback">Penulis wajib diisi.</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="penerbit" class="form-label">Penerbit</label>
+                                <input type="text" class="form-control" id="penerbit" maxlength="100" name="penerbit" value="<?= htmlspecialchars((string) $penerbit, ENT_QUOTES, 'UTF-8') ?>" required>
+                                <div class="invalid-feedback">Penerbit wajib diisi.</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="tahunTerbit" class="form-label">Tahun Terbit</label>
+                                <input type="number" class="form-control" id="tahunTerbit" name="tahun_terbit" value="<?= htmlspecialchars((string) $tahunTerbit, ENT_QUOTES, 'UTF-8') ?>" min="1901" max="<?= date('Y') ?>" step="1" required>
+                                <div class="invalid-feedback">Tahun terbit harus antara 1901 sampai <?= date('Y') ?>.</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="stok" class="form-label">Stok</label>
+                                <input type="number" class="form-control" id="stok" max="2147483647" name="stok" value="<?= htmlspecialchars((string) $stok, ENT_QUOTES, 'UTF-8') ?>" min="0" step="1" required>
+                                <div class="invalid-feedback">Stok minimal 0.</div>
+                            </div>
+                        </div>
+                        <button type="submit" id="tombolSimpan" class="btn btn-primary">
+                            <?= $edit ? 'Simpan Perubahan' : 'Tambah Buku' ?>
+                        </button>
+                        <?php if ($edit): ?>
+                            <a href="index.php" class="btn btn-secondary">Batal</a>
+                        <?php endif; ?>
+                    </form>
+                </section>
+                <section class="bg-white border rounded p-3" id="daftarBuku">
+                    <h2 class="h4 mb-3">Daftar Buku</h2>
+
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>No</th>
+                                    <th>Judul</th>
+                                    <th>Penulis</th>
+                                    <th>Penerbit</th>
+                                    <th>Tahun Terbit</th>
+                                    <th>Stok</th>
+                                    <th>Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($bukus)): ?>
+                                    <tr>
+                                        <td colspan="7" class="text-center">
+                                            <?= $cari !== '' ? 'Buku yang dicari tidak ditemukan.' : 'Belum ada data buku.' ?>
+                                        </td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($bukus as $index => $buku): ?>
+                                    <tr>
+                                        <td><?= $index + 1 ?></td>
+                                        <td><?= htmlspecialchars((string) $buku['Judul'], ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars((string) $buku['Penulis'], ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars($buku['Penerbit'] ?? '-', ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars((string) $buku['Tahun Terbit'], ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td><?= htmlspecialchars((string) $buku['Stok'], ENT_QUOTES, 'UTF-8') ?></td>
+                                        <td>
+                                            <div class="d-flex gap-2">
+                                                <a href="index.php?edit=<?= (int) $buku['id'] ?>"
+                                                   class="btn btn-sm btn-warning">
+                                                    Edit
+                                                </a>
+                                                <form action="index.php" method="post"
+                                                      onsubmit="return confirm('Apakah Anda yakin ingin menghapus buku ini?')">
+                                                    <input type="hidden" name="aksi" value="hapus">
+                                                    <input type="hidden" name="id" value="<?= (int) $buku['id'] ?>">
+                                                    <input type="hidden" name="token" value="<?= htmlspecialchars($_SESSION['token'], ENT_QUOTES, 'UTF-8') ?>">
+                                                    <button type="submit" class="btn btn-sm btn-danger">
+                                                        Hapus
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <footer class="bg-primary text-white text-center p-3 mt-4">
+        <p class="mb-0">&copy; 2026 Website Peminjaman Buku.</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.getElementById("formBuku").addEventListener("submit", function (event) {
+            this.classList.add("was-validated");
+            if (!this.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+        });
+    </script>
+</body>
+</html>
